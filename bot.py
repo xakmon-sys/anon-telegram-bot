@@ -6,7 +6,6 @@ from aiogram.filters import Command
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from aiohttp import web
 
-# Токен твого бота та ID адміністратора
 BOT_TOKEN = "8724564645:AAFK2Im7H2_WpY9G9EiRZbnIz1fRuwa_4J4"
 ADMIN_ID = "6109923832"
 
@@ -50,22 +49,27 @@ async def start_search(message: types.Message):
             return
 
 async def handle_web(request):
-    return web.Response(text="Bot is running smoothly!")
+    return web.Response(text="Bot is perfectly alive!")
+
+# Функція, яка запустить бота у фоні ОДНОЧАСНО з веб-сервером
+async def start_bot_background(app):
+    asyncio.create_task(dp.start_polling(bot))
 
 async def main():
-    # Налаштування веб-сервера під порт Render
     app = web.Application()
     app.router.add_get("/", handle_web)
+    
+    # Головний тригер: коли сервер стартує, фоном вмикається наш бот
+    app.on_startup.append(start_bot_background)
+    
+    port = int(os.getenv("PORT", 10000))
     runner = web.AppRunner(app)
     await runner.setup()
-    
-    # Render автоматично видає PORT, якщо його немає — беремо 10000
-    port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     
-    # Запуск довгого опитування бота (Long Polling)
-    await dp.start_polling(bot)
+    # Тримаємо сервер активним
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
