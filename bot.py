@@ -1,29 +1,33 @@
 import asyncio
 import logging
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
 import os
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
 from aiohttp import web
 
 BOT_TOKEN = "8724564645:AAFK2Im7H2_WpY9G9EiRZbnIz1fRuwa_4J4"
-ADMIN_ID = 6109923832
+ADMIN_ID = "6109923832"
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher()
 users_db = {}
 
 def get_main_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(types.KeyboardButton(text="🔍 Знайти співрозмовника"))
-    return markup
+    builder = ReplyKeyboardBuilder()
+    builder.add(types.KeyboardButton(text="🔍 Знайти співрозмовника"))
+    builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
 
 def get_chat_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(types.KeyboardButton(text="⏭ Наступний (Next)"), types.KeyboardButton(text="🛑 Зупинити чат"))
-    return markup
+    builder = ReplyKeyboardBuilder()
+    builder.add(types.KeyboardButton(text="⏭ Наступний (Next)"))
+    builder.add(types.KeyboardButton(text="🛑 Зупинити чат"))
+    builder.adjust(2)
+    return builder.as_markup(resize_keyboard=True)
 
-@dp.message_handler(commands=["start"])
+@dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     if user_id not in users_db:
@@ -31,7 +35,7 @@ async def cmd_start(message: types.Message):
     welcome_text = "✨ **Ласкаво просимо до Анонімного Чату!** ✨\n\nСпілкуйся інкогніто."
     await message.answer(welcome_text, parse_mode="Markdown", reply_markup=get_main_menu())
 
-@dp.message_handler(lambda message: message.text == "🔍 Знайти співрозмовника")
+@dp.message(F.text == "🔍 Знайти співрозмовника")
 async def start_search(message: types.Message):
     user_id = message.from_user.id
     users_db[user_id] = {"status": "search", "partner": None}
@@ -47,17 +51,14 @@ async def start_search(message: types.Message):
 async def handle_web(request):
     return web.Response(text="Bot is running!")
 
-# Запуск простого веб-сервера для Render
-app = web.Application()
-app.router.add_get("/", handle_web)
+async def main():
+    app = web.Application()
+    app.router.add_get("/", handle_web)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
+    await site.start()
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    # Запускаємо веб-сервер у фоні
-    loop = asyncio.get_event_loop()
-    runner = web.AppRunner(app)
-    loop.run_until_complete(runner.setup())
-    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
-    loop.run_until_complete(site.start())
-    
-    # Запускаємо самого бота
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
