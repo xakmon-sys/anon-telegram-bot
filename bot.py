@@ -17,7 +17,7 @@ dp = Dispatcher()
 # ADMIN CONFIG
 # =========================
 ADMIN_ID = 342371504
-admin_watch = {}   # user_id -> True/False
+admin_watch = {}
 
 # =====================================================
 # USERS DATABASE (RAM)
@@ -73,6 +73,7 @@ def get_chat_menu():
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
+
     user_id = message.from_user.id
 
     users_db[user_id] = {
@@ -90,46 +91,7 @@ async def start(message: types.Message):
     )
 
 # =====================================================
-# ADMIN PANEL
-# =====================================================
-
-@dp.message(Command("admin"))
-async def admin(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await message.answer("🛠 Адмін режим:\n/reply user_id текст\n/watch user_id")
-
-@dp.message(Command("reply"))
-async def admin_reply(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    try:
-        _, uid, *txt = message.text.split()
-        uid = int(uid)
-        text = " ".join(txt)
-
-        await bot.send_message(uid, f"👮 Адмін: {text}")
-        await message.answer("✅ Відправлено")
-    except:
-        await message.answer("❌ /reply user_id текст")
-
-@dp.message(Command("watch"))
-async def admin_watch_cmd(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    try:
-        _, uid = message.text.split()
-        uid = int(uid)
-
-        admin_watch[uid] = True
-        await message.answer(f"👁 Стеження увімкнено за {uid}")
-    except:
-        await message.answer("❌ /watch user_id")
-
-# =====================================================
-# MAIN FORWARDER + ADMIN LOG
+# ADMIN LOG + CHAT FORWARD (FIXED)
 # =====================================================
 
 @dp.message()
@@ -142,17 +104,7 @@ async def forwarder(message: types.Message):
         try:
             await bot.send_message(
                 ADMIN_ID,
-                f"📩 {user_id}: {message.text or 'MEDIA'}"
-            )
-        except:
-            pass
-
-    # ===== WATCH MODE (адмін бачить чат) =====
-    if admin_watch.get(user_id):
-        try:
-            await bot.send_message(
-                ADMIN_ID,
-                f"👁 LIVE {user_id}: {message.text or 'MEDIA'}"
+                f"📩 USER {user_id}:\n{message.text or 'MEDIA'}"
             )
         except:
             pass
@@ -162,6 +114,25 @@ async def forwarder(message: types.Message):
 
     user = users_db[user_id]
 
+    # ❗❗❗ FIX: не даємо кнопкам і командам йти в forwarder
+    if message.text:
+        if message.text.startswith("/") or message.text in [
+            "👨 Я Хлопець", "👩 Я Дівчина",
+            "🔍 Знайти співрозмовника",
+            "📊 Онлайн",
+            "ℹ️ Правила",
+            "🙋‍♂️ Шукаю Хлопця",
+            "🙋‍♀️ Шукаю Дівчину",
+            "🌍 Шукаю Будь-кого",
+            "⬅️ Назад",
+            "💬 Звичайне спілкування",
+            "❤️ Флірт",
+            "⏭ Next",
+            "🛑 Зупинити чат",
+            "👀 Хто друкує?"
+        ]:
+            return
+
     if user["status"] != "chat":
         return
 
@@ -170,18 +141,24 @@ async def forwarder(message: types.Message):
         return
 
     try:
+
         await bot.send_chat_action(partner_id, "typing")
 
         if message.text:
             await bot.send_message(partner_id, message.text)
+
         elif message.photo:
             await bot.send_photo(partner_id, message.photo[-1].file_id, caption=message.caption)
+
         elif message.video:
             await bot.send_video(partner_id, message.video.file_id, caption=message.caption)
+
         elif message.voice:
             await bot.send_voice(partner_id, message.voice.file_id)
+
         elif message.sticker:
             await bot.send_sticker(partner_id, message.sticker.file_id)
+
         elif message.animation:
             await bot.send_animation(partner_id, message.animation.file_id)
 
@@ -189,18 +166,19 @@ async def forwarder(message: types.Message):
         logging.error(e)
 
 # =====================================================
-# WEB + FIX TELEGRAM CONFLICT
+# WEB SERVER
 # =====================================================
 
 async def handle(request):
     return web.Response(text="OK")
 
 async def start_bg(app):
-    # FIX: avoid multiple polling instances
-    await bot.delete_webhook(drop_pending_updates=True)
     asyncio.create_task(dp.start_polling(bot))
 
 async def main():
+
+    await bot.delete_webhook(drop_pending_updates=True)
+
     app = web.Application()
     app.router.add_get("/", handle)
     app.on_startup.append(start_bg)
