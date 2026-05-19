@@ -27,7 +27,6 @@ users_db = {}
 # =====================================================
 # KEYBOARDS
 # =====================================================
-
 def get_gender_menu():
     builder = ReplyKeyboardBuilder()
     builder.add(types.KeyboardButton(text="👨 Я Хлопець"))
@@ -70,7 +69,6 @@ def get_chat_menu():
 # =====================================================
 # START
 # =====================================================
-
 @dp.message(Command("start"))
 async def start(message: types.Message):
 
@@ -84,22 +82,50 @@ async def start(message: types.Message):
         "partner": None
     }
 
-    await message.answer(
-        "✨ <b>Ласкаво просимо в РОЗМОВА</b> ✨",
-        parse_mode="HTML",
-        reply_markup=get_gender_menu()
+    text = (
+        "✨ <b>Ласкаво просимо в РОЗМОВА</b> ✨\n\n"
+        "🔒 Повністю анонімний чат\n"
+        "💬 Спілкування без реєстрації\n"
+        "❤️ Пошук по темах\n\n"
+        "👇 Обери свою стать"
     )
 
-# =====================================================
-# ADMIN LOG + CHAT FORWARD (FIXED)
-# =====================================================
+    await message.answer(text, parse_mode="HTML", reply_markup=get_gender_menu())
 
+# =====================================================
+# ADMIN COMMAND
+# =====================================================
+@dp.message(Command("admin"))
+async def admin(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer("🛠 Адмін режим активний\n/ reply user_id текст")
+
+@dp.message(Command("reply"))
+async def admin_reply(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    try:
+        _, uid, *txt = message.text.split()
+        uid = int(uid)
+        text = " ".join(txt)
+
+        await bot.send_message(uid, f"👮 Адмін: {text}")
+        await message.answer("✅ Sent")
+
+    except:
+        await message.answer("❌ /reply user_id text")
+
+# =====================================================
+# FORWARD + ADMIN LOG
+# =====================================================
 @dp.message()
 async def forwarder(message: types.Message):
 
     user_id = message.from_user.id
 
-    # ================= ADMIN LOG =================
+    # admin log
     if user_id != ADMIN_ID:
         try:
             await bot.send_message(
@@ -114,34 +140,15 @@ async def forwarder(message: types.Message):
 
     user = users_db[user_id]
 
-    # ❗❗❗ FIX: не даємо кнопкам і командам йти в forwarder
-    if message.text:
-        if message.text.startswith("/") or message.text in [
-            "👨 Я Хлопець", "👩 Я Дівчина",
-            "🔍 Знайти співрозмовника",
-            "📊 Онлайн",
-            "ℹ️ Правила",
-            "🙋‍♂️ Шукаю Хлопця",
-            "🙋‍♀️ Шукаю Дівчину",
-            "🌍 Шукаю Будь-кого",
-            "⬅️ Назад",
-            "💬 Звичайне спілкування",
-            "❤️ Флірт",
-            "⏭ Next",
-            "🛑 Зупинити чат",
-            "👀 Хто друкує?"
-        ]:
-            return
-
     if user["status"] != "chat":
         return
 
     partner_id = user["partner"]
+
     if not partner_id:
         return
 
     try:
-
         await bot.send_chat_action(partner_id, "typing")
 
         if message.text:
@@ -168,17 +175,21 @@ async def forwarder(message: types.Message):
 # =====================================================
 # WEB SERVER
 # =====================================================
-
 async def handle(request):
     return web.Response(text="OK")
 
+# =====================================================
+# FIX: ONLY ONE POLLING INSTANCE (ВАЖЛИВО)
+# =====================================================
 async def start_bg(app):
+    # ВАЖЛИВО: не створюємо дублікати polling
+    await bot.delete_webhook(drop_pending_updates=True)
     asyncio.create_task(dp.start_polling(bot))
 
+# =====================================================
+# MAIN
+# =====================================================
 async def main():
-
-    await bot.delete_webhook(drop_pending_updates=True)
-
     app = web.Application()
     app.router.add_get("/", handle)
     app.on_startup.append(start_bg)
@@ -194,6 +205,7 @@ async def main():
 
     await site.start()
 
+    print("BOT RUNNING")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
