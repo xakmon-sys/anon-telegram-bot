@@ -1,13 +1,11 @@
 import asyncio
 import logging
-import sqlite3
+import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiohttp import web
 
-# =========================================
-# НОВИЙ TOKEN ВСТАВ СЮДИ
-# =========================================
 BOT_TOKEN = "8724564645:AAFk2Im7H2_WpY9G9EiRZbnIz1fRuwa_4J4"
 
 logging.basicConfig(level=logging.INFO)
@@ -15,246 +13,277 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# =========================================
-# SQLITE DATABASE
-# =========================================
-db = sqlite3.connect("rozmova.db")
-cursor = db.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    gender TEXT,
-    likes INTEGER DEFAULT 0,
-    dislikes INTEGER DEFAULT 0
-)
-""")
-
-db.commit()
-
-# =========================================
-# RAM DATA
-# =========================================
-users = {}
-search_queue = []
-
+# =====================================================
+# USERS DATABASE (RAM)
+# =====================================================
 """
-users structure:
+users_db structure:
+
 {
     user_id: {
-        status: idle/search/chat,
-        partner: user_id or None,
-        pref: male/female/any
+        status: idle/search/chat/gender_select
+        gender: male/female
+        search_preference: male/female/any
+        topic: normal/flirt
+        partner: user_id
     }
 }
 """
 
-# =========================================
-# USER FUNCTIONS
-# =========================================
-def init_user(user_id):
-    if user_id not in users:
-        users[user_id] = {
-            "status": "idle",
-            "partner": None,
-            "pref": "any"
-        }
+users_db = {}
 
-    cursor.execute(
-        "INSERT OR IGNORE INTO users (user_id) VALUES (?)",
-        (user_id,)
-    )
-    db.commit()
-
-def get_rating(user_id):
-    cursor.execute(
-        "SELECT likes, dislikes FROM users WHERE user_id=?",
-        (user_id,)
-    )
-    row = cursor.fetchone()
-
-    if row:
-        return row[0], row[1]
-
-    return 0, 0
-
-def add_like(user_id):
-    cursor.execute(
-        "UPDATE users SET likes = likes + 1 WHERE user_id=?",
-        (user_id,)
-    )
-    db.commit()
-
-def add_dislike(user_id):
-    cursor.execute(
-        "UPDATE users SET dislikes = dislikes + 1 WHERE user_id=?",
-        (user_id,)
-    )
-    db.commit()
-
-def get_gender(user_id):
-    cursor.execute(
-        "SELECT gender FROM users WHERE user_id=?",
-        (user_id,)
-    )
-
-    row = cursor.fetchone()
-
-    if row:
-        return row[0]
-
-    return None
-
-def set_gender(user_id, gender):
-    cursor.execute(
-        "UPDATE users SET gender=? WHERE user_id=?",
-        (gender, user_id)
-    )
-    db.commit()
-
-# =========================================
+# =====================================================
 # KEYBOARDS
-# =========================================
-def kb(name):
+# =====================================================
 
+def get_gender_menu():
     builder = ReplyKeyboardBuilder()
 
-    if name == "gender":
-        builder.add(
-            types.KeyboardButton(text="👨 Я Хлопець"),
-            types.KeyboardButton(text="👩 Я Дівчина")
-        )
+    builder.add(types.KeyboardButton(text="👨 Я Хлопець"))
+    builder.add(types.KeyboardButton(text="👩 Я Дівчина"))
 
-    elif name == "main":
-        builder.add(
-            types.KeyboardButton(text="🔍 Знайти співрозмовника"),
-            types.KeyboardButton(text="📊 Онлайн")
-        )
-        builder.adjust(1)
-
-    elif name == "search":
-        builder.add(
-            types.KeyboardButton(text="🙋‍♂️ Шукаю Хлопця"),
-            types.KeyboardButton(text="🙋‍♀️ Шукаю Дівчину"),
-            types.KeyboardButton(text="🌍 Будь-кого"),
-            types.KeyboardButton(text="⬅️ Назад")
-        )
-        builder.adjust(2, 1, 1)
-
-    elif name == "chat":
-        builder.add(
-            types.KeyboardButton(text="⏭ Next"),
-            types.KeyboardButton(text="🛑 Зупинити")
-        )
-
-    elif name == "rate":
-        builder.add(
-            types.KeyboardButton(text="👍"),
-            types.KeyboardButton(text="👎")
-        )
+    builder.adjust(2)
 
     return builder.as_markup(resize_keyboard=True)
 
-# =========================================
+def get_main_menu():
+    builder = ReplyKeyboardBuilder()
+
+    builder.add(types.KeyboardButton(text="🔍 Знайти співрозмовника"))
+    builder.add(types.KeyboardButton(text="📊 Онлайн"))
+    builder.add(types.KeyboardButton(text="ℹ️ Правила"))
+
+    builder.adjust(1)
+
+    return builder.as_markup(resize_keyboard=True)
+
+def get_search_menu():
+    builder = ReplyKeyboardBuilder()
+
+    builder.add(types.KeyboardButton(text="🙋‍♂️ Шукаю Хлопця"))
+    builder.add(types.KeyboardButton(text="🙋‍♀️ Шукаю Дівчину"))
+    builder.add(types.KeyboardButton(text="🌍 Шукаю Будь-кого"))
+    builder.add(types.KeyboardButton(text="⬅️ Назад"))
+
+    builder.adjust(2, 1, 1)
+
+    return builder.as_markup(resize_keyboard=True)
+
+def get_topic_menu():
+    builder = ReplyKeyboardBuilder()
+
+    builder.add(types.KeyboardButton(text="💬 Звичайне спілкування"))
+    builder.add(types.KeyboardButton(text="❤️ Флірт"))
+
+    builder.adjust(1)
+
+    return builder.as_markup(resize_keyboard=True)
+
+def get_chat_menu():
+    builder = ReplyKeyboardBuilder()
+
+    builder.add(types.KeyboardButton(text="⏭ Next"))
+    builder.add(types.KeyboardButton(text="🛑 Зупинити чат"))
+    builder.add(types.KeyboardButton(text="👀 Хто друкує?"))
+
+    builder.adjust(2, 1)
+
+    return builder.as_markup(resize_keyboard=True)
+
+# =====================================================
 # START
-# =========================================
+# =====================================================
+
 @dp.message(Command("start"))
 async def start(message: types.Message):
 
-    init_user(message.from_user.id)
+    user_id = message.from_user.id
 
-    await message.answer(
-        "👋 Привіт у РОЗМОВА\n\nОбери свою стать:",
-        reply_markup=kb("gender")
+    users_db[user_id] = {
+        "status": "gender_select",
+        "gender": None,
+        "search_preference": "any",
+        "topic": "normal",
+        "partner": None
+    }
+
+    text = (
+        "✨ <b>Ласкаво просимо в РОЗМОВА</b> ✨\n\n"
+        "🔒 Повністю анонімний чат\n"
+        "💬 Спілкування без реєстрації\n"
+        "❤️ Пошук по темах\n\n"
+        "👇 Обери свою стать"
     )
 
-# =========================================
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=get_gender_menu()
+    )
+
+# =====================================================
 # GENDER
-# =========================================
+# =====================================================
+
 @dp.message(F.text.in_(["👨 Я Хлопець", "👩 Я Дівчина"]))
-async def gender(message: types.Message):
+async def set_gender(message: types.Message):
 
     user_id = message.from_user.id
 
-    init_user(user_id)
+    if user_id not in users_db:
+        return
 
     gender = "male"
 
     if "Дівчина" in message.text:
         gender = "female"
 
-    set_gender(user_id, gender)
+    users_db[user_id]["gender"] = gender
+    users_db[user_id]["status"] = "idle"
 
     await message.answer(
-        "✅ Збережено",
-        reply_markup=kb("main")
+        "✅ Дані збережено\n\nТепер можеш шукати співрозмовника 👇",
+        reply_markup=get_main_menu()
     )
 
-# =========================================
-# FIND MENU
-# =========================================
+# =====================================================
+# RULES
+# =====================================================
+
+@dp.message(F.text == "ℹ️ Правила")
+async def rules(message: types.Message):
+
+    text = (
+        "📜 <b>Правила чату</b>\n\n"
+        "🚫 Заборонено спам\n"
+        "🚫 Заборонено образи\n"
+        "🚫 Заборонено 18+ контент\n\n"
+        "✅ Будь ввічливим\n"
+        "✅ Поважай співрозмовника"
+    )
+
+    await message.answer(text, parse_mode="HTML")
+
+# =====================================================
+# ONLINE
+# =====================================================
+
+@dp.message(F.text == "📊 Онлайн")
+async def stats(message: types.Message):
+
+    total = len(users_db)
+
+    searching = sum(
+        1 for x in users_db.values()
+        if x["status"] == "search"
+    )
+
+    chatting = sum(
+        1 for x in users_db.values()
+        if x["status"] == "chat"
+    )
+
+    text = (
+        "📊 <b>Статистика РОЗМОВА</b>\n\n"
+        f"👥 Онлайн: <b>{total}</b>\n"
+        f"🔎 Шукають: <b>{searching}</b>\n"
+        f"💬 В чаті: <b>{chatting}</b>"
+    )
+
+    await message.answer(text, parse_mode="HTML")
+
+# =====================================================
+# SEARCH MENU
+# =====================================================
+
 @dp.message(F.text == "🔍 Знайти співрозмовника")
-async def find(message: types.Message):
+async def search_menu(message: types.Message):
 
     await message.answer(
-        "Кого шукаємо?",
-        reply_markup=kb("search")
+        "👇 Кого шукаємо?",
+        reply_markup=get_search_menu()
     )
 
-# =========================================
-# SEARCH
-# =========================================
+# =====================================================
+# SEARCH PREFERENCE
+# =====================================================
+
 @dp.message(F.text.in_([
     "🙋‍♂️ Шукаю Хлопця",
     "🙋‍♀️ Шукаю Дівчину",
-    "🌍 Будь-кого"
+    "🌍 Шукаю Будь-кого"
 ]))
-async def search(message: types.Message):
+async def choose_topic(message: types.Message):
 
     user_id = message.from_user.id
 
-    init_user(user_id)
-
-    user = users[user_id]
-
-    # preference
     if "Хлопця" in message.text:
-        user["pref"] = "male"
+        users_db[user_id]["search_preference"] = "male"
 
     elif "Дівчину" in message.text:
-        user["pref"] = "female"
+        users_db[user_id]["search_preference"] = "female"
 
     else:
-        user["pref"] = "any"
+        users_db[user_id]["search_preference"] = "any"
 
+    await message.answer(
+        "🎭 Обери тему спілкування",
+        reply_markup=get_topic_menu()
+    )
+
+# =====================================================
+# TOPIC SEARCH
+# =====================================================
+
+@dp.message(F.text.in_([
+    "💬 Звичайне спілкування",
+    "❤️ Флірт"
+]))
+async def start_search(message: types.Message):
+
+    user_id = message.from_user.id
+
+    user = users_db[user_id]
+
+    topic = "normal"
+
+    if "Флірт" in message.text:
+        topic = "flirt"
+
+    user["topic"] = topic
     user["status"] = "search"
 
-    my_gender = get_gender(user_id)
+    my_gender = user["gender"]
+    my_pref = user["search_preference"]
 
-    # MATCHMAKING
-    for partner_id in search_queue:
+    await message.answer(
+        "🔎 Шукаємо ідеального співрозмовника...",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
+
+    for partner_id, partner in users_db.items():
 
         if partner_id == user_id:
-            continue
-
-        partner = users.get(partner_id)
-
-        if not partner:
             continue
 
         if partner["status"] != "search":
             continue
 
-        partner_gender = get_gender(partner_id)
+        # topic check
+        if partner["topic"] != topic:
+            continue
 
-        # my pref
-        if user["pref"] != "any":
-            if partner_gender != user["pref"]:
+        partner_gender = partner["gender"]
+        partner_pref = partner["search_preference"]
+
+        # my preference
+        if my_pref != "any":
+            if partner_gender != my_pref:
                 continue
 
-        # partner pref
-        if partner["pref"] != "any":
-            if my_gender != partner["pref"]:
+        # partner preference
+        if partner_pref != "any":
+            if my_gender != partner_pref:
                 continue
 
         # CONNECT
@@ -264,46 +293,41 @@ async def search(message: types.Message):
         partner["status"] = "chat"
         partner["partner"] = user_id
 
-        if user_id in search_queue:
-            search_queue.remove(user_id)
+        topic_name = "💬 Звичайне спілкування"
 
-        if partner_id in search_queue:
-            search_queue.remove(partner_id)
-
-        likes1, dislikes1 = get_rating(partner_id)
-        likes2, dislikes2 = get_rating(user_id)
+        if topic == "flirt":
+            topic_name = "❤️ Флірт"
 
         await bot.send_message(
             user_id,
-            f"🎉 Співрозмовника знайдено\n\n👍 {likes1} | 👎 {dislikes1}",
-            reply_markup=kb("chat")
+            f"🎉 Співрозмовника знайдено!\n\n{topic_name}",
+            reply_markup=get_chat_menu()
         )
 
         await bot.send_message(
             partner_id,
-            f"🎉 Співрозмовника знайдено\n\n👍 {likes2} | 👎 {dislikes2}",
-            reply_markup=kb("chat")
+            f"🎉 Співрозмовника знайдено!\n\n{topic_name}",
+            reply_markup=get_chat_menu()
         )
 
         return
 
-    if user_id not in search_queue:
-        search_queue.append(user_id)
-
-    await message.answer(
-        "🔎 Шукаю співрозмовника...",
-        reply_markup=kb("chat")
-    )
-
-# =========================================
+# =====================================================
 # STOP CHAT
-# =========================================
-@dp.message(F.text == "🛑 Зупинити")
-async def stop(message: types.Message):
+# =====================================================
+
+@dp.message(F.text == "🛑 Зупинити чат")
+async def stop_chat(message: types.Message):
 
     user_id = message.from_user.id
 
-    user = users[user_id]
+    if user_id not in users_db:
+        return
+
+    user = users_db[user_id]
+
+    if user["status"] != "chat":
+        return
 
     partner_id = user["partner"]
 
@@ -312,127 +336,99 @@ async def stop(message: types.Message):
 
     if partner_id:
 
-        partner = users[partner_id]
-
-        partner["status"] = "idle"
-        partner["partner"] = None
-
-        await bot.send_message(
-            user_id,
-            "Оціни співрозмовника:",
-            reply_markup=kb("rate")
-        )
+        users_db[partner_id]["status"] = "idle"
+        users_db[partner_id]["partner"] = None
 
         await bot.send_message(
             partner_id,
-            "Оціни співрозмовника:",
-            reply_markup=kb("rate")
+            "❌ Співрозмовник завершив чат",
+            reply_markup=get_main_menu()
         )
 
-# =========================================
+    await message.answer(
+        "🛑 Чат завершено",
+        reply_markup=get_main_menu()
+    )
+
+# =====================================================
 # NEXT
-# =========================================
+# =====================================================
+
 @dp.message(F.text == "⏭ Next")
 async def next_chat(message: types.Message):
 
     user_id = message.from_user.id
 
-    user = users[user_id]
+    if user_id not in users_db:
+        return
+
+    user = users_db[user_id]
+
+    if user["status"] != "chat":
+        return
 
     partner_id = user["partner"]
 
     if partner_id:
 
-        users[partner_id]["status"] = "idle"
-        users[partner_id]["partner"] = None
+        users_db[partner_id]["status"] = "idle"
+        users_db[partner_id]["partner"] = None
 
         await bot.send_message(
             partner_id,
-            "❌ Співрозмовник переключив чат",
-            reply_markup=kb("main")
+            "⏭ Співрозмовник переключив чат",
+            reply_markup=get_main_menu()
         )
 
     user["status"] = "idle"
     user["partner"] = None
 
     await message.answer(
-        "🔎 Шукаємо нового...",
-        reply_markup=kb("search")
+        "🔍 Шукай нового співрозмовника 👇",
+        reply_markup=get_search_menu()
     )
 
-# =========================================
-# RATING
-# =========================================
-@dp.message(F.text.in_(["👍", "👎"]))
-async def rating(message: types.Message):
+# =====================================================
+# TYPING
+# =====================================================
 
-    user_id = message.from_user.id
-
-    user = users[user_id]
-
-    last_partner = user.get("last_partner")
-
-    if last_partner:
-
-        if message.text == "👍":
-            add_like(last_partner)
-
-        else:
-            add_dislike(last_partner)
+@dp.message(F.text == "👀 Хто друкує?")
+async def typing_info(message: types.Message):
 
     await message.answer(
-        "✅ Дякуємо за оцінку",
-        reply_markup=kb("main")
+        "😄 Просто напиши щось і перевір"
     )
 
-# =========================================
-# ONLINE
-# =========================================
-@dp.message(F.text == "📊 Онлайн")
-async def online(message: types.Message):
-
-    total = len(users)
-
-    searching = len([
-        x for x in users.values()
-        if x["status"] == "search"
-    ])
-
-    chatting = len([
-        x for x in users.values()
-        if x["status"] == "chat"
-    ])
-
-    text = (
-        f"👥 Онлайн: {total}\n"
-        f"🔎 Шукають: {searching}\n"
-        f"💬 В чаті: {chatting}"
-    )
-
-    await message.answer(text)
-
-# =========================================
+# =====================================================
 # BACK
-# =========================================
+# =====================================================
+
 @dp.message(F.text == "⬅️ Назад")
 async def back(message: types.Message):
 
+    user_id = message.from_user.id
+
+    if user_id in users_db:
+        users_db[user_id]["status"] = "idle"
+
     await message.answer(
         "🏠 Головне меню",
-        reply_markup=kb("main")
+        reply_markup=get_main_menu()
     )
 
-# =========================================
-# MEDIA FORWARD
-# =========================================
+# =====================================================
+# MESSAGE FORWARDER
+# =====================================================
+
 @dp.message()
-async def relay(message: types.Message):
+async def forwarder(message: types.Message):
 
     user_id = message.from_user.id
 
-    init_user(user_id)
+    if user_id not in users_db:
+        return
 
-    user = users[user_id]
+    user = users_db[user_id]
 
     if user["status"] != "chat":
         return
@@ -443,6 +439,12 @@ async def relay(message: types.Message):
         return
 
     try:
+
+        # typing status
+        await bot.send_chat_action(
+            partner_id,
+            "typing"
+        )
 
         # TEXT
         if message.text:
@@ -474,24 +476,70 @@ async def relay(message: types.Message):
                 message.voice.file_id
             )
 
-        # STICKER
+        # STICKERS
         elif message.sticker:
             await bot.send_sticker(
                 partner_id,
                 message.sticker.file_id
             )
 
-    except:
-        pass
+        # GIF
+        elif message.animation:
+            await bot.send_animation(
+                partner_id,
+                message.animation.file_id
+            )
 
-# =========================================
+    except Exception as e:
+
+        logging.error(e)
+
+# =====================================================
+# WEB SERVER
+# =====================================================
+
+async def handle(request):
+
+    return web.Response(text="ROZMOVA BOT ONLINE")
+
+async def start_background(app):
+
+    asyncio.create_task(
+        dp.start_polling(bot)
+    )
+
+# =====================================================
 # MAIN
-# =========================================
+# =====================================================
+
 async def main():
+
+    await bot.delete_webhook(drop_pending_updates=True)
+
+    app = web.Application()
+
+    app.router.add_get("/", handle)
+
+    app.on_startup.append(start_background)
+
+    port = int(os.getenv("PORT", 10000))
+
+    runner = web.AppRunner(app)
+
+    await runner.setup()
+
+    site = web.TCPSite(
+        runner,
+        "0.0.0.0",
+        port
+    )
+
+    await site.start()
 
     print("BOT STARTED")
 
-    await dp.start_polling(bot)
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
+
     asyncio.run(main())
