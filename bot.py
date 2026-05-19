@@ -12,17 +12,9 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# =======================
-# ADMIN
-# =======================
-ADMIN_ID = 342371504
-
-# База користувачів
+# База даних користувачів у пам'яті
+# Структура: {user_id: {"status": "idle"/"gender_select"/"search"/"chat", "gender": "male"/"female"/None, "search_preference": "male"/"female"/"any"/None, "partner": partner_id}}
 users_db = {}
-
-# =======================
-# KEYBOARDS
-# =======================
 
 def get_gender_menu():
     builder = ReplyKeyboardBuilder()
@@ -54,220 +46,190 @@ def get_chat_menu():
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
-# =======================
-# START
-# =======================
-
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
-
-    users_db[user_id] = {
-        "status": "gender_select",
-        "gender": None,
-        "search_preference": None,
-        "partner": None
-    }
-
+    
+    # Реєструємо або скидаємо налаштування для старту
+    users_db[user_id] = {"status": "gender_select", "gender": None, "search_preference": None, "partner": None}
+    
     welcome_text = (
         "✨ **Ласкаво просимо до Анонімного Чату!** ✨\n\n"
         "Тут ти можеш спілкуватися абсолютно інкогніто.\n"
-        "Для початку роботи, будь ласка, **обери свою стать** 👇"
+        "Для початку роботи, будь ласка, **обери свою стать** нижче 👇"
     )
-
     await message.answer(welcome_text, parse_mode="Markdown", reply_markup=get_gender_menu())
-
-# =======================
-# ADMIN REPLY
-# =======================
-
-@dp.message(Command("admin"))
-async def admin_panel(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await message.answer("🛠 Адмін активний")
-
-@dp.message(Command("reply"))
-async def admin_reply(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    try:
-        _, uid, *txt = message.text.split()
-        await bot.send_message(int(uid), "👮 Адмін: " + " ".join(txt))
-    except:
-        await message.answer("Формат: /reply user_id текст")
-
-# =======================
-# GENDER
-# =======================
 
 @dp.message(F.text.in_(["👨 Я Хлопець", "👩 Я Дівчина"]))
 async def set_gender(message: types.Message):
-    uid = message.from_user.id
+    user_id = message.from_user.id
+    if user_id not in users_db:
+        users_db[user_id] = {"status": "idle", "gender": None, "search_preference": None, "partner": None}
+        
+    gender = "male" if "Хлопець" in message.text else "female"
+    users_db[user_id]["gender"] = gender
+    users_db[user_id]["status"] = "idle"
+    
+    await message.answer("✅ Твою стать збережено! Тепер ти можеш шукати пару.", reply_markup=get_main_menu())
 
-    if uid not in users_db:
-        users_db[uid] = {}
-
-    users_db[uid]["gender"] = "male" if "Хлопець" in message.text else "female"
-    users_db[uid]["status"] = "idle"
-
-    await message.answer("✅ Збережено", reply_markup=get_main_menu())
-
-# =======================
-# SEARCH MENU
-# =======================
+@dp.message(F.text == "📊 Статистика онлайну")
+@dp.message(Command("stats"))
+async def show_stats(message: types.Message):
+    total = len(users_db)
+    searching = sum(1 for u in users_db.values() if u["status"] == "search")
+    chating = sum(1 for u in users_db.values() if u["status"] == "chat")
+    
+    stats_text = (
+        "📊 **Онлайн статистика чату:**\n\n"
+        f"👥 Всього користувачів у системі: **{total}**\n"
+        f"🔎 Шукають пару прямо зараз: **{searching}**\n"
+        f"💬 Зараз спілкуються в чатах: **{chating}**"
+    )
+    await message.answer(stats_text, parse_mode="Markdown")
 
 @dp.message(F.text == "🔍 Знайти співрозмовника")
-async def search_menu(message: types.Message):
-    await message.answer("Обери фільтр 👇", reply_markup=get_search_menu())
+async def show_search_options(message: types.Message):
+    user_id = message.from_user.id
+    
+    # Перевірка, чи вказана стать
+    if user_id not in users_db or users_db[user_id]["gender"] is None:
+        await message.answer("⚠️ Спочатку виберіть свою стать!", reply_markup=get_gender_menu())
+        return
 
-# =======================
-# SEARCH LOGIC
-# =======================
-
-async def find_partner(user_id, pref_text):
-    users_db[user_id]["status"] = "search"
-
-    pref = "any"
-    if "Хлопця" in pref_text:
-        pref = "male"
-    elif "Дівчину" in pref_text:
-        pref = "female"
-
-    users_db[user_id]["search_preference"] = pref
-
-    my_gender = users_db[user_id]["gender"]
-
-    for partner_id, data in users_db.items():
-        if partner_id == user_id:
-            continue
-
-        if data.get("status") != "search":
-            continue
-
-        partner_gender = data.get("gender")
-        partner_pref = data.get("search_preference")
-
-        if (partner_pref in ["any", my_gender]) and (pref in ["any", partner_gender]):
-            users_db[user_id]["status"] = "chat"
-            users_db[partner_id]["status"] = "chat"
-
-            users_db[user_id]["partner"] = partner_id
-            users_db[partner_id]["partner"] = user_id
-
-            await bot.send_message(user_id, "🎉 Чат знайдено", reply_markup=get_chat_menu())
-            await bot.send_message(partner_id, "🎉 Чат знайдено", reply_markup=get_chat_menu())
-            return
-
-# =======================
-# FIXED SEARCH HANDLER
-# =======================
+    if users_db[user_id]["status"] == "chat":
+        await message.answer("Ти вже в чаті! Спершу зупини його.", reply_markup=get_chat_menu())
+        return
+        
+    await message.answer("Кого ти хочеш знайти для спілкування? 👇", reply_markup=get_search_menu())
 
 @dp.message(F.text.in_(["🙋‍♂️ Шукаю Хлопця", "🙋‍♀️ Шукаю Дівчину", "🌍 Шукаю Будь-кого"]))
-async def start_search(message: types.Message):
-    await message.answer("🔎 Пошук...", reply_markup=types.ReplyKeyboardRemove())
-    await find_partner(message.from_user.id, message.text)
+async def start_filtered_search(message: types.Message):
+    user_id = message.from_user.id
+    
+    if user_id not in users_db or users_db[user_id]["gender"] is None:
+        await message.answer("⚠️ Спочатку виберіть свою стать!", reply_markup=get_gender_menu())
+        return
 
-# =======================
-# NEXT FIX (ВАЖЛИВО ВИПРАВЛЕНО)
-# =======================
+    # Визначаємо вподобання пошуку
+    pref = "any"
+    if "Хлопця" in message.text:
+        pref = "male"
+    elif "Дівчину" in message.text:
+        pref = "female"
+        
+    users_db[user_id].update({"status": "search", "search_preference": pref})
+    my_gender = users_db[user_id]["gender"]
+    
+    await message.answer("🔎 Шукаю пару за твоїми фільтрами... Зачекай хвилинку.", reply_markup=types.ReplyKeyboardRemove())
+    
+    # Алгоритм розумного підбору з урахуванням статі обох сторін
+    for partner_id, data in users_db.items():
+        if partner_id != user_id and data["status"] == "search":
+            partner_gender = data["gender"]
+            partner_pref = data["search_preference"]
+            
+            # Перевіряємо, чи підходимо ми партнеру
+            match_me_to_partner = (partner_pref == "any" or partner_pref == my_gender)
+            # Перевіряємо, чи підходить партнер нам
+            match_partner_to_me = (pref == "any" or pref == partner_gender)
+            
+            if match_me_to_partner and match_partner_to_me:
+                # З'єднуємо пару
+                users_db[user_id].update({"status": "chat", "partner": partner_id})
+                users_db[partner_id].update({"status": "chat", "partner": user_id})
+                
+                await bot.send_message(user_id, "🎉 Співрозмовника знайдено! Напиши «Привіт» 👋", reply_markup=get_chat_menu())
+                await bot.send_message(partner_id, "🎉 Співрозмовника знайдено! Напиши «Привіт» 👋", reply_markup=get_chat_menu())
+                return
+
+@dp.message(F.text == "⬅️ В головне меню")
+async def go_to_main(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in users_db:
+        users_db[user_id]["status"] = "idle"
+    await message.answer("Ти повернувся в головне меню.", reply_markup=get_main_menu())
+
+@dp.message(F.text == "🛑 Зупинити чат")
+async def stop_chat(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in users_db and users_db[user_id]["status"] == "chat":
+        partner_id = users_db[user_id]["partner"]
+        
+        users_db[user_id].update({"status": "idle", "partner": None})
+        users_db[partner_id].update({"status": "idle", "partner": None})
+        
+        await bot.send_message(user_id, "🛑 Ти закінчив цей чат.", reply_markup=get_main_menu())
+        await bot.send_message(partner_id, "🛑 Співрозмовник залишив чат. Ти повернувся в головне меню.", reply_markup=get_main_menu())
+    else:
+        await message.answer("Ти зараз не в чаті.", reply_markup=get_main_menu())
 
 @dp.message(F.text == "⏭ Наступний (Next)")
-async def next_chat(message: types.Message):
-    uid = message.from_user.id
+async def next_partner(message: types.Message):
+    user_id = message.from_user.id
+    
+    # Якщо був активний чат, спочатку роз'єднуємо
+    if user_id in users_db and users_db[user_id]["status"] == "chat":
+        partner_id = users_db[user_id]["partner"]
+        users_db[partner_id].update({"status": "idle", "partner": None})
+        await bot.send_message(partner_id, "🛑 Співрозмовник переключився на іншого користувача.", reply_markup=get_main_menu())
+    
+    # Якщо збереглися старі налаштування фільтру — шукаємо за ними, інакше шукаємо "будь-кого"
+    pref = users_db.get(user_id, {}).get("search_preference", "any")
+    
+    # Створюємо штучне повідомлення для виклику функції пошуку
+    fake_message = message
+    if pref == "male":
+        fake_message.text = "🙋‍♂️ Шукаю Хлопця"
+    elif pref == "female":
+        fake_message.text = "🙋‍♀️ Шукаю Дівчину"
+    else:
+        fake_message.text = "🌍 Шукаю Будь-кого"
+        
+    await start_filtered_search(fake_message)
 
-    if uid in users_db and users_db[uid].get("status") == "chat":
-        partner = users_db[uid]["partner"]
-
-        users_db[partner]["status"] = "idle"
-        users_db[partner]["partner"] = None
-
-        await bot.send_message(partner, "🔁 Перемкнули тебе", reply_markup=get_main_menu())
-
-    pref = users_db.get(uid, {}).get("search_preference", "any")
-
-    text_map = {
-        "male": "🙋‍♂️ Шукаю Хлопця",
-        "female": "🙋‍♀️ Шукаю Дівчину",
-        "any": "🌍 Шукаю Будь-кого"
-    }
-
-    await find_partner(uid, text_map.get(pref, "🌍 Шукаю Будь-кого"))
-
-# =======================
-# GLOBAL FORWARD + ADMIN MEDIA FIX
-# =======================
-
+# Пересилач повідомлень
 @dp.message()
-async def forward(message: types.Message):
-    uid = message.from_user.id
-
-    # ================= ADMIN LOG (TEXT + MEDIA)
-    if uid != ADMIN_ID:
+async def global_forwarder(message: types.Message):
+    user_id = message.from_user.id
+    
+    if user_id in users_db and users_db[user_id]["status"] == "chat":
+        partner_id = users_db[user_id]["partner"]
         try:
             if message.text:
-                await bot.send_message(ADMIN_ID, f"📩 {uid}: {message.text}")
-
+                await bot.send_message(partner_id, message.text)
             elif message.photo:
-                await bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=f"📩 {uid}")
-
-            elif message.video:
-                await bot.send_video(ADMIN_ID, message.video.file_id, caption=f"📩 {uid}")
-
+                await bot.send_photo(partner_id, message.photo[-1].file_id, caption=message.caption)
             elif message.voice:
-                await bot.send_voice(ADMIN_ID, message.voice.file_id, caption=f"📩 {uid}")
-
+                await bot.send_voice(partner_id, message.voice.file_id, caption=message.caption)
             elif message.sticker:
-                await bot.send_sticker(ADMIN_ID, message.sticker.file_id)
-
-            elif message.animation:
-                await bot.send_animation(ADMIN_ID, message.animation.file_id)
-
-        except Exception as e:
-            logging.error(e)
-
-    # ================= CHAT FORWARD
-    if uid in users_db and users_db[uid].get("status") == "chat":
-        partner = users_db[uid]["partner"]
-
-        try:
-            if message.text:
-                await bot.send_message(partner, message.text)
-            elif message.photo:
-                await bot.send_photo(partner, message.photo[-1].file_id, caption=message.caption)
+                await bot.send_sticker(partner_id, message.sticker.file_id)
             elif message.video:
-                await bot.send_video(partner, message.video.file_id, caption=message.caption)
-            elif message.voice:
-                await bot.send_voice(partner, message.voice.file_id)
-            elif message.sticker:
-                await bot.send_sticker(partner, message.sticker.file_id)
+                await bot.send_video(partner_id, message.video.file_id, caption=message.caption)
             elif message.animation:
-                await bot.send_animation(partner, message.animation.file_id)
+                await bot.send_animation(partner_id, message.animation.file_id)
         except Exception as e:
-            logging.error(e)
+            logging.error(f"Error forwarding: {e}")
+            await message.answer("⚠️ Не вдалося доставити повідомлення.")
+    else:
+        # Ігноруємо системні кнопки, на інші тексти відповідаємо підказкою
+        if message.text not in ["🔍 Знайти співрозмовника", "🛑 Зупинити чат", "⏭ Наступний (Next)", "📊 Статистика онлайну", "👨 Я Хлопець", "👩 Я Дівчина", "🙋‍♂️ Шукаю Хлопця", "🙋‍♀️ Шукаю Дівчину", "🌍 Шукаю Будь-кого", "⬅️ В головне меню"]:
+            await message.answer("Поки що ти ні з ким не спілкуєшся. Скористайся меню нижче 👇", reply_markup=get_main_menu())
 
-# =======================
-# WEB SERVER
-# =======================
+async def handle_web(request):
+    return web.Response(text="Bot is perfectly alive!")
 
-async def handle(request):
-    return web.Response(text="OK")
-
-async def start_bg(app):
+async def start_bot_background(app):
     asyncio.create_task(dp.start_polling(bot))
 
 async def main():
     app = web.Application()
-    app.router.add_get("/", handle)
-    app.on_startup.append(start_bg)
-
+    app.router.add_get("/", handle_web)
+    app.on_startup.append(start_bot_background)
+    port = int(os.getenv("PORT", 10000))
     runner = web.AppRunner(app)
     await runner.setup()
-
-    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
