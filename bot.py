@@ -5,53 +5,58 @@ import random
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiohttp import web
 
 BOT_TOKEN = "8724564645:AAFk2Im7H2_WpY9G9EiRZbnIz1fRuwa_4J4"
 
 logging.basicConfig(level=logging.INFO)
 
+# Використовуємо FSM для станів (це надійніше ніж словник)
+class DatingForm(StatesGroup):
+    waiting_for_photo = State()
+
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
 
-# База даних користувачів та анкет
-users_db = {}
-dating_profiles = [] # Список анкет для дайвінчику
+dating_profiles = []
 
-# --- КЛАВІАТУРИ ---
 def get_main_menu():
     builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text="🔍 Знайти співрозмовника"))
-    builder.add(types.KeyboardButton(text="❤️ Дайвінчик")) 
-    builder.add(types.KeyboardButton(text="📊 Онлайн"))
-    builder.add(types.KeyboardButton(text="ℹ️ Правила"))
+    builder.button(text="🔍 Знайти співрозмовника")
+    builder.button(text="❤️ Дайвінчик")
+    builder.button(text="📊 Онлайн")
+    builder.button(text="ℹ️ Правила")
     builder.adjust(1)
     return builder.as_markup(resize_keyboard=True)
 
-# --- НОВІ ФУНКЦІЇ ДАЙВІНЧИК ---
-
+# --- ДАЙВІНЧИК ---
 @dp.message(F.text == "❤️ Дайвінчик")
 async def dating_start(message: types.Message):
     builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text="📝 Створити анкету"), types.KeyboardButton(text="👀 Дивитися анкети"))
-    builder.add(types.KeyboardButton(text="⬅️ Назад"))
+    builder.button(text="📝 Створити анкету")
+    builder.button(text="👀 Дивитися анкети")
+    builder.button(text="⬅️ Назад")
+    builder.adjust(1)
     await message.answer("❤️ **Дайвінчик**\nОбери дію:", reply_markup=builder.as_markup(resize_keyboard=True))
 
 @dp.message(F.text == "📝 Створити анкету")
-async def create_profile_ask(message: types.Message):
-    users_db[message.from_user.id]["status"] = "dating_wait_photo"
-    await message.answer("Надішліть фото для анкети (одним повідомленням з описом):")
+async def create_profile_ask(message: types.Message, state: FSMContext):
+    await state.set_state(DatingForm.waiting_for_photo)
+    await message.answer("Надішліть фото для анкети (з описом в підписі):")
 
-@dp.message(F.status == "dating_wait_photo", F.photo)
-async def save_profile(message: types.Message):
+@dp.message(DatingForm.waiting_for_photo, F.photo)
+async def save_profile(message: types.Message, state: FSMContext):
     profile = {
         "user_id": message.from_user.id,
         "photo": message.photo[-1].file_id,
         "caption": message.caption or "Без опису"
     }
     dating_profiles.append(profile)
-    users_db[message.from_user.id]["status"] = "idle"
-    await message.answer("✅ Ваша анкета успішно створена!", reply_markup=get_main_menu())
+    await state.clear()
+    await message.answer("✅ Анкета створена!", reply_markup=get_main_menu())
 
 @dp.message(F.text == "👀 Дивитися анкети")
 async def view_dating(message: types.Message):
@@ -60,33 +65,31 @@ async def view_dating(message: types.Message):
     
     p = random.choice(dating_profiles)
     builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text="👍 Like"), types.KeyboardButton(text="👎 Next"))
-    await bot.send_photo(message.from_user.id, p["photo"], caption=f"👤 Анкета: {p['caption']}", reply_markup=builder.as_markup(resize_keyboard=True))
+    builder.button(text="👍 Like")
+    builder.button(text="👎 Next")
+    builder.button(text="⬅️ Назад")
+    await bot.send_photo(message.chat.id, p["photo"], caption=f"👤: {p['caption']}", reply_markup=builder.as_markup(resize_keyboard=True))
 
-# --- ЗАЛИШОК ВАШОГО КОДУ (СТРУКТУРА ЗБЕРЕЖЕНА) ---
+@dp.message(F.text.in_({"👍 Like", "👎 Next"}))
+async def next_profile(message: types.Message):
+    await view_dating(message)
+
+@dp.message(F.text == "⬅️ Назад")
+async def back_to_main(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Головне меню:", reply_markup=get_main_menu())
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    users_db[message.from_user.id] = {"status": "idle"}
     await message.answer("Привіт! Ласкаво просимо.", reply_markup=get_main_menu())
 
-# ... (сюди вставте вашу стару логіку чату: gender_menu, search_menu тощо) ...
-
-# Обов'язково додайте вихід назад
-@dp.message(F.text == "⬅️ Назад")
-async def back_to_main(message: types.Message):
-    await message.answer("Головне меню:", reply_markup=get_main_menu())
-
-# --- ВЕБ СЕРВЕР ТА ЗАПУСК ---
-async def handle(request): return web.Response(text="ROZMOVA BOT ONLINE")
+# --- ЗАПУСК ---
+async def on_startup():
+    logging.info("Бот запущений!")
 
 async def main():
-    app = web.Application()
-    app.router.add_get("/", handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000))).start()
-    await dp.start_polling(bot)
+    # Запускаємо веб-сервер та поллінг паралельно
+    await dp.start_polling(bot, on_startup=on_startup)
 
 if __name__ == "__main__":
     asyncio.run(main())
