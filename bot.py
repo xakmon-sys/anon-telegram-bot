@@ -1,95 +1,91 @@
 import asyncio
 import logging
-import os
-import random
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiohttp import web
 
 BOT_TOKEN = "8724564645:AAFk2Im7H2_WpY9G9EiRZbnIz1fRuwa_4J4"
 
 logging.basicConfig(level=logging.INFO)
-
-# Використовуємо FSM для станів (це надійніше ніж словник)
-class DatingForm(StatesGroup):
-    waiting_for_photo = State()
-
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+dp = Dispatcher()
 
-dating_profiles = []
+users_db = {}
 
-def get_main_menu():
+# --- КЛАВІАТУРИ ---
+def get_kb(buttons, adjust=1):
     builder = ReplyKeyboardBuilder()
-    builder.button(text="🔍 Знайти співрозмовника")
-    builder.button(text="❤️ Дайвінчик")
-    builder.button(text="📊 Онлайн")
-    builder.button(text="ℹ️ Правила")
-    builder.adjust(1)
+    for text in buttons:
+        builder.add(types.KeyboardButton(text=text))
+    builder.adjust(adjust)
     return builder.as_markup(resize_keyboard=True)
 
-# --- ДАЙВІНЧИК ---
-@dp.message(F.text == "❤️ Дайвінчик")
-async def dating_start(message: types.Message):
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="📝 Створити анкету")
-    builder.button(text="👀 Дивитися анкети")
-    builder.button(text="⬅️ Назад")
-    builder.adjust(1)
-    await message.answer("❤️ **Дайвінчик**\nОбери дію:", reply_markup=builder.as_markup(resize_keyboard=True))
-
-@dp.message(F.text == "📝 Створити анкету")
-async def create_profile_ask(message: types.Message, state: FSMContext):
-    await state.set_state(DatingForm.waiting_for_photo)
-    await message.answer("Надішліть фото для анкети (з описом в підписі):")
-
-@dp.message(DatingForm.waiting_for_photo, F.photo)
-async def save_profile(message: types.Message, state: FSMContext):
-    profile = {
-        "user_id": message.from_user.id,
-        "photo": message.photo[-1].file_id,
-        "caption": message.caption or "Без опису"
-    }
-    dating_profiles.append(profile)
-    await state.clear()
-    await message.answer("✅ Анкета створена!", reply_markup=get_main_menu())
-
-@dp.message(F.text == "👀 Дивитися анкети")
-async def view_dating(message: types.Message):
-    if not dating_profiles:
-        return await message.answer("Анкет поки немає.")
-    
-    p = random.choice(dating_profiles)
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="👍 Like")
-    builder.button(text="👎 Next")
-    builder.button(text="⬅️ Назад")
-    await bot.send_photo(message.chat.id, p["photo"], caption=f"👤: {p['caption']}", reply_markup=builder.as_markup(resize_keyboard=True))
-
-@dp.message(F.text.in_({"👍 Like", "👎 Next"}))
-async def next_profile(message: types.Message):
-    await view_dating(message)
-
-@dp.message(F.text == "⬅️ Назад")
-async def back_to_main(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Головне меню:", reply_markup=get_main_menu())
-
+# --- ЛОГІКА ---
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    await message.answer("Привіт! Ласкаво просимо.", reply_markup=get_main_menu())
+    users_db[message.from_user.id] = {"status": "idle", "gender": None, "pref": "any", "topic": "normal", "partner": None}
+    await message.answer("✨ Обери свою стать:", reply_markup=get_kb(["👨 Я Хлопець", "👩 Я Дівчина"], 2))
 
-# --- ЗАПУСК ---
-async def on_startup():
-    logging.info("Бот запущений!")
+@dp.message(F.text.in_(["👨 Я Хлопець", "👩 Я Дівчина"]))
+async def set_gender(message: types.Message):
+    if message.from_user.id not in users_db: return
+    users_db[message.from_user.id]["gender"] = "male" if "Хлопець" in message.text else "female"
+    await message.answer("✅ Готово! Шукай співрозмовника.", reply_markup=get_kb(["🔍 Знайти співрозмовника", "📊 Онлайн"]))
+
+@dp.message(F.text == "🔍 Знайти співрозмовника")
+async def search_menu(message: types.Message):
+    await message.answer("Кого шукаємо?", reply_markup=get_kb(["🙋‍♂️ Хлопця", "🙋‍♀️ Дівчину", "🌍 Будь-кого", "⬅️ Назад"], 2))
+
+@dp.message(F.text.in_(["🙋‍♂️ Хлопця", "🙋‍♀️ Дівчину", "🌍 Будь-кого"]))
+async def choose_topic(message: types.Message):
+    pref = {"🙋‍♂️ Хлопця": "male", "🙋‍♀️ Дівчину": "female", "🌍 Будь-кого": "any"}[message.text]
+    users_db[message.from_user.id]["pref"] = pref
+    await message.answer("🎭 Обери тему:", reply_markup=get_kb(["💬 Звичайне", "❤️ Флірт"]))
+
+@dp.message(F.text.in_(["💬 Звичайне", "❤️ Флірт"]))
+async def start_search(message: types.Message):
+    user_id = message.from_user.id
+    user = users_db[user_id]
+    user["topic"] = "flirt" if "Флірт" in message.text else "normal"
+    user["status"] = "search"
+    
+    await message.answer("🔎 Пошук...", reply_markup=types.ReplyKeyboardRemove())
+    
+    for pid, partner in users_db.items():
+        if pid != user_id and partner["status"] == "search" and partner["topic"] == user["topic"]:
+            # Перевірка преференцій
+            if (user["pref"] == "any" or user["pref"] == partner["gender"]) and \
+               (partner["pref"] == "any" or partner["pref"] == user["gender"]):
+                
+                user.update({"status": "chat", "partner": pid})
+                partner.update({"status": "chat", "partner": user_id})
+                
+                await bot.send_message(user_id, "🎉 Знайдено!", reply_markup=get_kb(["⏭ Next", "🛑 Зупинити"]))
+                await bot.send_message(pid, "🎉 Знайдено!", reply_markup=get_kb(["⏭ Next", "🛑 Зупинити"]))
+                return
+
+@dp.message(F.text == "🛑 Зупинити чат")
+async def stop_chat(message: types.Message):
+    user = users_db.get(message.from_user.id)
+    if user and user["status"] == "chat":
+        partner_id = user["partner"]
+        user.update({"status": "idle", "partner": None})
+        if partner_id in users_db:
+            users_db[partner_id].update({"status": "idle", "partner": None})
+            await bot.send_message(partner_id, "❌ Співрозмовник вийшов.", reply_markup=get_kb(["🔍 Знайти співрозмовника"]))
+        await message.answer("🛑 Чат завершено.", reply_markup=get_kb(["🔍 Знайти співрозмовника"]))
+
+@dp.message()
+async def forwarder(message: types.Message):
+    user = users_db.get(message.from_user.id)
+    if user and user["status"] == "chat" and user["partner"]:
+        try:
+            await bot.copy_message(user["partner"], message.chat.id, message.message_id)
+        except: pass
 
 async def main():
-    # Запускаємо веб-сервер та поллінг паралельно
-    await dp.start_polling(bot, on_startup=on_startup)
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
